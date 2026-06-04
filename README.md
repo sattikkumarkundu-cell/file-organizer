@@ -31,6 +31,7 @@ A lightweight, fast, and safe command-line tool to organize files into categorie
 - **Plain CLI Interface**: Clean, simple text output (no colors, no emojis)
 - **Duplicate Handling**: Automatically renames duplicates with counters
 - **Error Handling**: Gracefully handles errors and reports them
+- **Undo / Restore**: Records moves to .fileorganizer_history.json and provides --undo to restore moves (dry-run does NOT record history)
 
 ## System Requirements
 
@@ -216,6 +217,7 @@ organize --path ~/Downloads --no-prompt
 | `--dry-run` | Preview without moving files |
 | `--no-prompt` | Skip permission prompt (organize all file types) |
 | `--restrict DIRS` | Comma-separated directories to exclude from organization |
+| `--undo` | Undo organization using the history file (.fileorganizer_history.json) in the target folder |
 | `--help` | Show help message |
 
 ### Examples
