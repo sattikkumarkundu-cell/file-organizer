@@ -12,6 +12,8 @@ from pathlib import Path
 import shutil
 import argparse
 from collections import defaultdict
+import json
+from datetime import datetime
 
 
 FILE_TYPES = {
@@ -118,6 +120,8 @@ SYSTEM_PROTECTED_DIRS = {
     "snap", "flatpak"
 }
 
+HISTORY_FILENAME = ".fileorganizer_history.json"
+
 
 def get_file_category(extension: str) -> str:
     """Get file category based on extension."""
@@ -171,6 +175,66 @@ def is_protected_directory(path: Path, restricted_dirs: set) -> bool:
     if path.name in restricted_dirs:
         return True
     return False
+
+
+def load_history(history_path: Path) -> list:
+    """Load move history from JSON file."""
+    try:
+        if history_path.exists():
+            with history_path.open("r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+
+def save_history(history_path: Path, data: list):
+    """Atomically save history list to JSON file."""
+    try:
+        tmp = history_path.with_suffix(history_path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        tmp.replace(history_path)
+    except Exception:
+        # best-effort; do not crash the organizer for history failures
+        pass
+
+
+def append_history_entry(history_path: Path, entry: dict):
+    history = load_history(history_path)
+    history.append(entry)
+    save_history(history_path, history)
+
+
+def undo_history(target_folder: Path):
+    """Undo all recorded moves in reverse order and clear history."""
+    history_path = target_folder / HISTORY_FILENAME
+    history = load_history(history_path)
+    if not history:
+        print(f"\n[INFO] No history found at {history_path}")
+        return
+
+    print(f"\n[UNDO] Restoring {len(history)} moves from history...")
+    undone = 0
+    for entry in reversed(history):
+        try:
+            src = Path(entry.get("from"))
+            dst = Path(entry.get("to"))
+            if dst.exists():
+                # ensure original parent exists
+                src.parent.mkdir(parents=True, exist_ok=True)
+                dest = get_unique_destination(src)
+                shutil.move(str(dst), str(dest))
+                print(f"[RESTORED] {dst} -> {dest}")
+                undone += 1
+            else:
+                print(f"[SKIP] Missing target to restore: {dst}")
+        except Exception as e:
+            print(f"[ERROR] Restoring {entry}: {e}")
+
+    # clear history after undo
+    save_history(history_path, [])
+    print(f"\n[UNDO COMPLETE] Restored: {undone} files")
 
 
 def collect_files_by_category(
@@ -341,6 +405,8 @@ def organize_folder(
     error_count = 0
     skipped_count = 0
 
+    history_path = target_folder / HISTORY_FILENAME
+
     if recursive:
         items = list(target_folder.rglob("*"))
         items_to_process = []
@@ -389,6 +455,12 @@ def organize_folder(
                     else:
                         destination_folder.mkdir(exist_ok=True, parents=True)
                         shutil.move(str(item), str(destination_file))
+                        entry = {
+                            "from": str(item),
+                            "to": str(destination_file),
+                            "timestamp": datetime.utcnow().isoformat() + "Z"
+                        }
+                        append_history_entry(history_path, entry)
                         print(f"[OK] {item.name} -> {category}/ ({size})")
                         moved_count += 1
 
@@ -434,6 +506,12 @@ def organize_folder(
                 else:
                     destination_folder.mkdir(exist_ok=True)
                     shutil.move(str(item), str(destination_file))
+                    entry = {
+                        "from": str(item),
+                        "to": str(destination_file),
+                        "timestamp": datetime.utcnow().isoformat() + "Z"
+                    }
+                    append_history_entry(history_path, entry)
                     print(f"[OK] {item.name} -> {category}/ ({size})")
                     moved_count += 1
 
@@ -473,6 +551,12 @@ def parse_arguments():
         "--skip-menus",
         action="store_true",
         help="Skip interactive menus and use defaults"
+    )
+
+    parser.add_argument(
+        "--undo",
+        action="store_true",
+        help="Undo organization using the history file in the target folder"
     )
 
     return parser.parse_args()
@@ -526,6 +610,19 @@ def main():
     print_header()
 
     args = parse_arguments()
+
+    # If undo was requested, perform undo and exit
+    if args.undo:
+        if args.path:
+            target_folder = Path(args.path).expanduser()
+            if not target_folder.exists() or not target_folder.is_dir():
+                print(f"\n[ERROR] Invalid path: {target_folder}")
+                return
+        else:
+            target_folder = Path.home() / "Downloads"
+
+        undo_history(target_folder)
+        return
 
     # Step 1: Get target folder
     if args.path:
